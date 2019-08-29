@@ -5,8 +5,12 @@ import keras.backend as K
 
 
 def position_embed(x):
+    # [batch_size, seq_len]
+    # [seq_len,]
     p = K.arange(K.shape(x)[1])
+    # [1, seq_len]
     p = K.expand_dims(p, 0)
+    # [batch_size, seq_len]
     p = K.tile(p, [K.shape(x)[0], 1])
 
     return p
@@ -105,10 +109,9 @@ class SelfAttention(Layer):
         return (input_shape[0][0], input_shape[0][1], self.output_dim)
 
 
-def model(char_len, num_class, drop_rate=0.2):
+def model(char_len, seq_len, num_class, drop_rate=0.2):
     char_size = 128
     position_size = 128
-    seq_len = 100
 
     x_char = Input(shape=(None,))
     s_index = Input(shape=(None,))
@@ -120,7 +123,8 @@ def model(char_len, num_class, drop_rate=0.2):
     mask = Lambda(lambda x: K.cast(K.greater(K.expand_dims(x, 2), 0), 'float32'))(x_char)
 
     x_position = Lambda(position_embed)(x_char)
-    x_position = Embedding(char_len, position_size)(x_position)
+    x_position = Embedding(seq_len, position_size)(x_position)
+
     x_embed = Embedding(char_len + 2, char_size)(x_char)
     x = Add()([x_embed, x_position])
     x = Dropout(drop_rate)(x)
@@ -152,7 +156,25 @@ def model(char_len, num_class, drop_rate=0.2):
     s_end_out = Lambda(lambda x: x[0] * x[1])([s_end_out, pn2])
 
     subject_model = Model(x_char, [s_star_out, s_end_out])
-    train_model = Model([x_char, s_index, s_star, s_end], [s_star_out, s_end_out])
+
+    s_embed = Embedding(char_len + 2, char_size)(s_index)
+    s_out = Bidirectional(LSTM(cnn_dim))(s_embed)
+
+    s_star_embed = Embedding(seq_len, position_size)(s_star)
+    s_end_embed = Embedding(seq_len, position_size)(s_end)
+    s_position_embed = Concatenate()([s_star_embed, s_end_embed])
+    s_out = Add()([s_out, s_position_embed])
+
+    x = SelfAttention(8, 16)([cnn_out, cnn_out, cnn_out, mask])
+    x = Concatenate()([cnn_out, x, s_out])
+    x = Conv1D(char_size, 3, padding='same', activation='relu')(x)
+    p_o_star_out = Dense(num_class, activation='sigmoid')(x)
+    p_o_end_out = Dense(num_class, activation='sigmoid')(x)
+
+    object_model = Model([x_char, s_index, s_star, s_end], [p_o_star_out, p_o_end_out])
+
+    train_model = Model([x_char, s_index, s_star, s_end, p_o_star, p_o_end],
+                        [s_star_out, s_end_out, p_o_star_out, p_o_end_out])
 
     s_star = K.expand_dims(s_star, axis=-1)
     s_end = K.expand_dims(s_end, axis=-1)
@@ -162,14 +184,19 @@ def model(char_len, num_class, drop_rate=0.2):
     s_end_loss = K.binary_crossentropy(s_end, s_end_out)
     s_end_loss = K.sum(s_end_loss * mask) / K.sum(mask)
 
-    loss = s_star_loss + s_end_loss
+    p_o_star_loss = K.binary_crossentropy(p_o_star, p_o_star_out)
+    p_o_star_loss = K.sum(p_o_star_loss * mask) / K.sum(mask)
+    p_o_end_loss = K.binary_crossentropy(p_o_end, p_o_end_out)
+    p_o_end_loss = K.sum(p_o_end_loss * mask) / K.sum(mask)
+
+    loss = s_star_loss + s_end_loss + p_o_star_loss + p_o_end_loss
 
     train_model.add_loss(loss)
-    train_model.compile(Adam(0.01))
+    train_model.compile(Adam(1e-3))
     train_model.summary()
 
-    return train_model, subject_model
+    return train_model, subject_model, object_model
 
 
 if __name__ == '__main__':
-    model(500, 50)
+    model(500, 50, 100)

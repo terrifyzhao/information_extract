@@ -107,7 +107,8 @@ venv.bak/
 .idea/
 
 out/
-out2
+out2/
+data/
 
 word2vec.model
 word2vec.model.trainables.syn1neg.npy

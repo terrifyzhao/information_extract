@@ -108,3 +108,7 @@ venv.bak/
 
 out/
 out2
+
+word2vec.model
+word2vec.model.trainables.syn1neg.npy
+word2vec.model.wv.vectors.npy
